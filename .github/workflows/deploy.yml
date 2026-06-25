@@ -8,7 +8,6 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  CONTAINER_NAME: crm-ticket-api
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
@@ -21,9 +20,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-
-    outputs:
-      image_tag: ${{ steps.meta.outputs.tags }}
 
     steps:
       - name: Checkout code
@@ -54,8 +50,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       # Make the package public so EC2 can pull without credentials.
-      # Uses the GitHub API — requires a PAT with packages:write if the
-      # repo is private, but for public repos GITHUB_TOKEN works.
       - name: Make package public
         continue-on-error: true
         env:
@@ -70,7 +64,7 @@ jobs:
             || echo "Note: Set package visibility to public manually in GitHub if this step fails."
 
   # ────────────────────────────────────────────────────────────────────────────
-  # Job 2: Deploy to EC2 by pulling the public image
+  # Job 2: Copy compose file + .env, then deploy via docker compose
   # ────────────────────────────────────────────────────────────────────────────
   deploy:
     name: Deploy to EC2
@@ -78,7 +72,20 @@ jobs:
     needs: build
 
     steps:
-      - name: Deploy on EC2
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Copy docker-compose.yml to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml"
+          target: "/home/${{ secrets.EC2_USERNAME }}/crm-ticket-sorting-api"
+          overwrite: true
+
+      - name: Write .env and run docker compose on EC2
         uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -86,33 +93,13 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             APP_DIR="/home/${{ secrets.EC2_USERNAME }}/crm-ticket-sorting-api"
-            mkdir -p "$APP_DIR"
             cd "$APP_DIR"
 
-            # Write the .env file from secrets (overwrite on every deploy)
+            # Write .env from GitHub Secrets (overwritten on every deploy)
             cat > .env <<EOF
             OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
             GITHUB_REPOSITORY=${{ github.repository }}
             EOF
-
-            # Write the compose file from the repo (already copied by prior SCP or inline)
-            cat > docker-compose.yml <<'COMPOSE'
-            services:
-              api:
-                image: ghcr.io/${GITHUB_REPOSITORY}:latest
-                container_name: crm-ticket-api
-                restart: unless-stopped
-                ports:
-                  - "80:8000"
-                env_file:
-                  - .env
-                healthcheck:
-                  test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-                  interval: 30s
-                  timeout: 10s
-                  retries: 3
-                  start_period: 10s
-            COMPOSE
 
             echo "▶ Pulling latest image..."
             docker compose pull
