@@ -96,9 +96,11 @@ jobs:
             cd "$APP_DIR"
 
             # Write .env from GitHub Secrets (overwritten on every deploy)
+            # GITHUB_REPOSITORY must be lowercase for Docker image references
+            REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
             cat > .env <<EOF
             OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
-            GITHUB_REPOSITORY=${{ github.repository }}
+            GITHUB_REPOSITORY=${REPO}
             EOF
 
             echo "▶ Pulling latest image..."
